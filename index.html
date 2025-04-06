@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Custom Platformer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            touch-action: none;
+            font-family: Arial, sans-serif;
+        }
+        #gameCanvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            font-size: 24px;
+            pointer-events: none;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+        }
+        .btn {
+            width: 80px;
+            height: 80px;
+            background: rgba(255,255,255,0.3);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            color: white;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #joystick {
+            position: absolute;
+            left: 30px;
+            bottom: 30px;
+            width: 120px;
+            height: 120px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 50%;
+        }
+        #joystickKnob {
+            position: absolute;
+            width: 60px;
+            height: 60px;
+            background: rgba(255,255,255,0.5);
+            border-radius: 50%;
+            left: 30px;
+            top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+        <div>Coins: <span id="coinCounter">0</span></div>
+        <div>Lives: <span id="lifeCounter">3</span></div>
+    </div>
+    <div id="joystick">
+        <div id="joystickKnob"></div>
+    </div>
+    <div id="controls">
+        <div class="btn" id="jumpBtn">↑</div>
+    </div>
+
+    <script>
+        // ================ GAME SETUP ================
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const coinCounter = document.getElementById('coinCounter');
+        const lifeCounter = document.getElementById('lifeCounter');
+        
+        // Set canvas size
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        // ================ GAME CONSTANTS ================
+        const GRAVITY = 0.5;
+        const JUMP_FORCE = -12;
+        const PLAYER_SPEED = 5;
+        const COIN_SPIN_SPEED = 0.1;
+        
+        // ================ ASSET LOADING ================
+        const assets = {
+            player: { loaded: false, img: new Image() },
+            coin: { loaded: false, img: new Image() },
+            enemy: { loaded: false, img: new Image() },
+            platform: { loaded: false, img: new Image() },
+            bgSky: { loaded: false, img: new Image() },
+            bgMountains: { loaded: false, img: new Image() },
+            bgTrees: { loaded: false, img: new Image() },
+            jumpSfx: new Audio('https://assets.mixkit.co/sfx/preview/mixkit-retro-arcade-jump-223.mp3'),
+            coinSfx: new Audio('https://assets.mixkit.co/sfx/preview/mixkit-retro-arcade-coin-pickup-1937.mp3')
+        };
+        
+        // Load your custom assets from Google Drive
+        // Using direct download links (replace with your actual links)
+        assets.player.img.src = 'https://drive.google.com/uc?export=download&id=1lrt9hFWmAVnwLcjlHk_--Yb5N1XmCsk5/player.png';
+        assets.coin.img.src = 'https://drive.google.com/uc?export=download&id=1lrt9hFWmAVnwLcjlHk_--Yb5N1XmCsk5/coin.png';
+        assets.enemy.img.src = 'https://drive.google.com/uc?export=download&id=1lrt9hFWmAVnwLcjlHk_--Yb5N1XmCsk5/enemy.png';
+        assets.platform.img.src = 'https://drive.google.com/uc?export=download&id=1lrt9hFWmAVnwLcjlHk_--Yb5N1XmCsk5/platform.png';
+        assets.bgSky.img.src = 'https://drive.google.com/uc?export=download&id=1lrt9hFWmAVnwLcjlHk_--Yb5N1XmCsk5/background.png';
+        
+        // Fallback if direct links don't work
+        assets.player.img.onerror = function() {
+            this.src = 'https://i.imgur.com/JqYeZRn.png'; // Default player
+        };
+        assets.enemy.img.onerror = function() {
+            this.src = 'https://i.imgur.com/8nLfKoR.png'; // Default enemy
+        };
+        assets.bgSky.img.onerror = function() {
+            this.src = 'https://i.imgur.com/8QZQZQZ.png'; // Default background
+        };
+        
+        // Wait for assets to load
+        let assetsLoaded = 0;
+        const totalAssets = Object.keys(assets).filter(key => assets[key].img).length;
+        
+        Object.keys(assets).forEach(key => {
+            if (assets[key].img) {
+                assets[key].img.onload = () => {
+                    assets[key].loaded = true;
+                    assetsLoaded++;
+                    if (assetsLoaded === totalAssets) initGame();
+                };
+            }
+        });
+        
+        // ================ GAME OBJECTS ================
+        let player, platforms, coins, enemies, particles, camera, score, lives;
+        
+        function initGame() {
+            // Reset game state
+            score = 0;
+            lives = 3;
+            
+            // Initialize objects
+            player = {
+                x: 100,
+                y: 300,
+                width: 50,
+                height: 50,
+                velX: 0,
+                velY: 0,
+                isJumping: false,
+                frame: 0,
+                frameCount: 0,
+                facingRight: true,
+                
+                update() {
+                    // Apply gravity
+                    this.velY += GRAVITY;
+                    
+                    // Update position
+                    this.x += this.velX;
+                    this.y += this.velY;
+                    
+                    // Animation
+                    if (Math.abs(this.velX) > 0.5) {
+                        this.frameCount++;
+                        if (this.frameCount > 10) {
+                            this.frame = (this.frame + 1) % 4;
+                            this.frameCount = 0;
+                        }
+                    } else {
+                        this.frame = 0;
+                    }
+                    
+                    // Face direction
+                    if (this.velX > 0) this.facingRight = true;
+                    if (this.velX < 0) this.facingRight = false;
+                    
+                    // Ground collision
+                    if (this.y + this.height > canvas.height - 50) {
+                        this.y = canvas.height - 50 - this.height;
+                        this.velY = 0;
+                        this.isJumping = false;
+                    }
+                    
+                    // Screen boundaries
+                    if (this.x < 0) this.x = 0;
+                    if (this.x + this.width > worldWidth) this.x = worldWidth - this.width;
+                },
+                
+                draw() {
+                    ctx.save();
+                    if (!this.facingRight) {
+                        ctx.translate(this.x + this.width, this.y);
+                        ctx.scale(-1, 1);
+                        ctx.drawImage(
+                            assets.player.img,
+                            this.frame * 64, 0, 64, 64,
+                            0, 0, this.width, this.height
+                        );
+                    } else {
+                        ctx.drawImage(
+                            assets.player.img,
+                            this.frame * 64, 0, 64, 64,
+                            this.x, this.y, this.width, this.height
+                        );
+                    }
+                    ctx.restore();
+                }
+            };
+            
+            // World setup
+            const worldWidth = 2000;
+            
+            platforms = [
+                { x: 0, y: canvas.height - 50, width: worldWidth, height: 50 },
+                { x: 200, y: 400, width: 200, height: 20 },
+                { x: 500, y: 300, width: 200, height: 20 },
+                { x: 800, y: 450, width: 200, height: 20 },
+                { x: 1200, y: 350, width: 200, height: 20 }
+            ];
+            
+            coins = [];
+            for (let i = 0; i < 20; i++) {
+                coins.push({
+                    x: 200 + Math.random() * (worldWidth - 400),
+                    y: 100 + Math.random() * 300,
+                    width: 30,
+                    height: 30,
+                    frame: 0,
+                    update() {
+                        this.frame = (this.frame + COIN_SPIN_SPEED) % 8;
+                    },
+                    draw() {
+                        ctx.drawImage(
+                            assets.coin.img,
+                            Math.floor(this.frame) * 32, 0, 32, 32,
+                            this.x - camera.x, this.y - camera.y, this.width, this.height
+                        );
+                    }
+                });
+            }
+            
+            enemies = [
+                { 
+                    x: 400, 
+                    y: canvas.height - 100, 
+                    width: 50, 
+                    height: 50,
+                    velX: -2,
+                    direction: -1,
+                    update() {
+                        this.x += this.velX;
+                        
+                        // Simple patrol AI
+                        if (this.x < 300 || this.x > 700) {
+                            this.direction *= -1;
+                            this.velX = 2 * this.direction;
+                        }
+                    },
+                    draw() {
+                        ctx.drawImage(
+                            assets.enemy.img,
+                            this.x - camera.x, this.y - camera.y, this.width, this.height
+                        );
+                    }
+                }
+            ];
+            
+            particles = [];
+            
+            camera = {
+                x: 0,
+                y: 0,
+                update() {
+                    // Follow player with some lead space
+                    this.x = player.x - canvas.width / 3;
+                    if (this.x < 0) this.x = 0;
+                    if (this.x > worldWidth - canvas.width) this.x = worldWidth - canvas.width;
+                }
+            };
+            
+            // Start game loop
+            gameLoop();
+        }
+        
+        // ================ GAME LOOP ================
+        function gameLoop() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Update camera
+            camera.update();
+            
+            // Draw background
+            drawBackground();
+            
+            // Update and draw objects
+            player.update();
+            
+            platforms.forEach(p => {
+                // Platform collision
+                if (player.y + player.height > p.y && 
+                    player.y < p.y + p.height &&
+                    player.x + player.width > p.x && 
+                    player.x < p.x + p.width &&
+                    player.velY > 0) {
+                    player.y = p.y - player.height;
+                    player.velY = 0;
+                    player.isJumping = false;
+                }
+            });
+            
+            // Update and draw coins
+            coins.forEach((coin, index) => {
+                coin.update();
+                
+                // Coin collection
+                const dist = Math.sqrt(
+                    Math.pow(player.x + player.width/2 - (coin.x + coin.width/2), 2) +
+                    Math.pow(player.y + player.height/2 - (coin.y + coin.height/2), 2)
+                );
+                
+                if (dist < 40) {
+                    coins.splice(index, 1);
+                    score += 100;
+                    coinCounter.textContent = score;
+                    assets.coinSfx.currentTime = 0;
+                    assets.coinSfx.play();
+                    
+                    // Create coin collection particles
+                    for (let i = 0; i < 10; i++) {
+                        particles.push({
+                            x: coin.x + coin.width/2,
+                            y: coin.y + coin.height/2,
+                            velX: Math.random() * 6 - 3,
+                            velY: Math.random() * -6,
+                            radius: Math.random() * 4 + 2,
+                            color: 'gold',
+                            life: 30
+                        });
+                    }
+                }
+                
+                coin.draw();
+            });
+            
+            // Update and draw enemies
+            enemies.forEach((enemy, index) => {
+                enemy.update();
+                
+                // Enemy collision
+                if (player.y + player.height > enemy.y &&
+                    player.y < enemy.y + enemy.height &&
+                    player.x + player.width > enemy.x &&
+                    player.x < enemy.x + enemy.width) {
+                    
+                    // Stomp on enemy
+                    if (player.velY > 0 && player.y + player.height < enemy.y + enemy.height/2) {
+                        enemies.splice(index, 1);
+                        player.velY = JUMP_FORCE * 0.7;
+                        
+                        // Create explosion particles
+                        for (let i = 0; i < 15; i++) {
+                            particles.push({
+                                x: enemy.x + enemy.width/2,
+                                y: enemy.y + enemy.height/2,
+                                velX: Math.random() * 8 - 4,
+                                velY: Math.random() * -8,
+                                radius: Math.random() * 5 + 3,
+                                color: 'red',
+                                life: 40
+                            });
+                        }
+                    } else {
+                        // Player hit by enemy
+                        lives--;
+                        lifeCounter.textContent = lives;
+                        player.x = 100;
+                        player.y = 300;
+                        player.velX = 0;
+                        player.velY = 0;
+                        
+                        if (lives <= 0) {
+                            // Game over
+                            alert(`Game Over! Score: ${score}`);
+                            initGame();
+                        }
+                    }
+                }
+                
+                enemy.draw();
+            });
+            
+            // Update and draw particles
+            particles.forEach((p, index) => {
+                p.x += p.velX;
+                p.y += p.velY;
+                p.life--;
+                
+                if (p.life <= 0) {
+                    particles.splice(index, 1);
+                } else {
+                    ctx.fillStyle = p.color;
+                    ctx.globalAlpha = p.life / 30;
+                    ctx.beginPath();
+                    ctx.arc(p.x - camera.x, p.y - camera.y, p.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+            });
+            
+            // Draw platforms
+            platforms.forEach(p => {
+                ctx.drawImage(
+                    assets.platform.img,
+                    p.x - camera.x, p.y - camera.y, p.width, p.height
+                );
+            });
+            
+            // Draw player
+            player.draw();
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // ================ HELPER FUNCTIONS ================
+        function drawBackground() {
+            // Sky (your custom background)
+            ctx.drawImage(
+                assets.bgSky.img,
+                0, 0, canvas.width, canvas.height
+            );
+        }
+        
+        // ================ INPUT HANDLING ================
+        // Touch controls
+        const joystick = document.getElementById('joystick');
+        const joystickKnob = document.getElementById('joystickKnob');
+        const jumpBtn = document.getElementById('jumpBtn');
+        
+        let touchId = null;
+        let joystickActive = false;
+        let joystickStartX = 0;
+        let joystickStartY = 0;
+        
+        joystick.addEventListener('touchstart', (e) => {
+            if (touchId === null) {
+                touchId = e.changedTouches[0].identifier;
+                const touch = e.changedTouches[0];
+                joystickStartX = touch.clientX;
+                joystickStartY = touch.clientY;
+                joystick.style.left = (touch.clientX - 60) + 'px';
+                joystick.style.top = (touch.clientY - 60) + 'px';
+                joystickActive = true;
+                e.preventDefault();
+            }
+        });
+        
+        document.addEventListener('touchmove', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                if (touch.identifier === touchId) {
+                    const dx = touch.clientX - joystickStartX;
+                    const dy = touch.clientY - joystickStartY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const angle = Math.atan2(dy, dx);
+                    
+                    const maxDistance = 40;
+                    const moveDistance = Math.min(distance, maxDistance);
+                    
+                    const moveX = Math.cos(angle) * moveDistance;
+                    const moveY = Math.sin(angle) * moveDistance;
+                    
+                    joystickKnob.style.left = (60 + moveX - 30) + 'px';
+                    joystickKnob.style.top = (60 + moveY - 30) + 'px';
+                    
+                    // Set player velocity based on joystick
+                    player.velX = (moveX / maxDistance) * PLAYER_SPEED * 2;
+                    
+                    e.preventDefault();
+                }
+            }
+        });
+        
+        document.addEventListener('touchend', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                if (touch.identifier === touchId) {
+                    joystickActive = false;
+                    touchId = null;
+                    joystickKnob.style.left = '30px';
+                    joystickKnob.style.top = '30px';
+                    player.velX = 0;
+                    e.preventDefault();
+                }
+            }
+        });
+        
+        jumpBtn.addEventListener('touchstart', () => {
+            if (!player.isJumping) {
+                player.velY = JUMP_FORCE;
+                player.isJumping = true;
+                assets.jumpSfx.currentTime = 0;
+                assets.jumpSfx.play();
+            }
+        });
+        
+        // Keyboard controls (for testing)
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') player.velX = -PLAYER_SPEED;
+            if (e.key === 'ArrowRight') player.velX = PLAYER_SPEED;
+            if (e.key === 'ArrowUp' && !player.isJumping) {
+                player.velY = JUMP_FORCE;
+                player.isJumping = true;
+                assets.jumpSfx.currentTime = 0;
+                assets.jumpSfx.play();
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft' && player.velX < 0) player.velX = 0;
+            if (e.key === 'ArrowRight' && player.velX > 0) player.velX = 0;
+        });
+    </script>
+</body>
+</html>
